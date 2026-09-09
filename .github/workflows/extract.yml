@@ -1,0 +1,50 @@
+name: Extract Hidden Data
+
+on:
+  workflow_dispatch: # GitHubの画面から手動でボタンを押して実行できるようにします
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run extraction script
+        run: |
+          python -c '
+          import requests
+
+          url = "https://ks-seed0310.github.io/image/image/png/temp_image_001.png"
+          print(f"Fetching image from: {url}")
+          response = requests.get(url)
+          data = response.content
+
+          iend_marker = b"\x49\x45\x4e\x44\xae\x42\x60\x82"
+          index = data.find(iend_marker)
+
+          if index != -1:
+              hidden_data = data[index + len(iend_marker):]
+              print("\n=== [結果] 隠しデータの抽出に成功しました ===")
+              
+              try:
+                  text_result = hidden_data.decode("utf-8").strip()
+                  if text_result:
+                      print(f"【テキストデータ】\n{text_result}")
+                  else:
+                      print("【テキストデータ】(空、または空白のみ)")
+              except Exception as e:
+                  print(f"【テキストデコード失敗】: {e}")
+                  
+              print(f"\n【生データ（16進数Hex）】\n0x{hidden_data.hex()}")
+          else:
+              print("\n❌ 警告: IENDマーカーが見つかりませんでした。")
+          '
