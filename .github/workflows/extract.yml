@@ -1,92 +1,67 @@
-name: Scan Custom PNG Chunks
+name: Extract Appended File Data
 
 on:
   workflow_dispatch:
 
 jobs:
-  scan:
+  extract:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # リポジトリ内の png1.png を読み込むために必要です
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Parse Local PNG Chunks
+      - name: Extract Data After IEND
         run: |
           python -c '
-          import struct
           import os
 
           file_path = "png1.png"
 
           if not os.path.exists(file_path):
-              print(f"❌ エラー: リポジトリのルートに {file_path} が見つかりません。")
+              print(f"❌ エラー: {file_path} が見つかりません。")
               exit(1)
 
-          print(f"Reading local image: {file_path}\n")
           with open(file_path, "rb") as f:
               data = f.read()
 
-          # PNGファイルのヘッダチェック (\x89PNG\r\n\x1a\n)
-          if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-              print("❌ 警告: 有効なPNGファイルではありません。")
-              exit(1)
+          # PNGの厳密な終了サイン「IEND」の4バイト
+          iend_sig = b"IEND"
+          iend_index = data.find(iend_sig)
 
-          # 標準的なPNGのチャンク名リスト
-          STANDARD_CHUNKS = {
-              b"IHDR", b"PLTE", b"IDAT", b"IEND",  # 必須チャンク
-              b"cHRM", b"gAMA", b"iCCP", b"sBIT", b"sRGB", b"bKGD",  # 補助チャンク
-              b"hIST", b"tRNS", b"pHYs", b"sPLT", b"tIME",
-              b"iTXt", b"tEXt", b"zTXt"  # テキストチャンク
-          }
-
-          offset = 8 # ヘッダの8バイトを飛ばす
-          data_len = len(data)
-          custom_chunk_found = False
-
-          print("=== [PNG チャンクスキャン開始] ===")
-          
-          while offset < data_len:
-              if offset + 8 > data_len:
-                  break
+          if iend_index != -1:
+              # IEND(4バイト) + その後ろにあるCRC(4バイト) = 計8バイトの後ろが「本当のお尻」
+              payload_start = iend_index + 8
+              appended_data = data[payload_start:]
               
-              # 4バイトのデータ長と、4バイトのチャンク名を取得
-              length, chunk_type = struct.unpack(">I4s", data[offset:offset+8])
+              print(f"=== [解析結果] ===")
+              print(f"PNGの正規データサイズ: {payload_start} バイト")
+              print(f"後ろにくっついているデータのサイズ: {len(appended_data)} バイト\n")
               
-              if offset + 8 + length + 4 > data_len:
-                  print(f"⚠️ チャンク {chunk_type.decode(errors=\x27ignore\x27)} の長さデータがファイルサイズを超えています。破損の可能性あり。")
-                  break
+              if len(appended_data) == 0:
+                  print("❌ IENDの後ろには1バイトもデータがありませんでした。")
+                  exit(0)
 
-              # チャンクのデータ本体
-              chunk_data = data[offset+8 : offset+8+length]
+              print("--- [救出した裏データの全貌] ---")
               
-              # 標準以外の「変わったチャンク」を見つけたら中身を大公開
-              if chunk_type not in STANDARD_CHUNKS:
-                  custom_chunk_found = True
-                  chunk_name = chunk_type.decode(errors=\x27ignore\x27)
-                  print(f"\n🚀 【未登録カスタムチャンク発見!】: [{chunk_name}] (データ長: {length} バイト)")
-                  
-                  # 1. テキストとして解読を試みる
-                  try:
-                      text_data = chunk_data.decode("utf-8").strip()
-                      if text_data:
-                          print(f" ┗ 📄 テキストデータ:\n{text_data}")
-                  except Exception:
-                      pass
-                  
-                  # 2. バイナリ（Hex）として出力
-                  print(f" ┗ 🔢 生データ(Hex): 0x{chunk_data.hex()}")
-
-              # 次のチャンクへ移動 (長さ4 + 名前4 + データ量 + CRC4)
-              offset += 8 + length + 4
-
-          if not custom_chunk_found:
-              print("\n❌ 変わったカスタムチャンクは見つかりませんでした（すべて標準チャンクでした）。")
+              # 1. Zipファイルなどが結合されている可能性をチェック (PK..)
+              if appended_data.startswith(b"PK\x03\x04"):
+                  print("📦 偽装された【Zipファイル】を検知しました！")
+                  print("ファイルの中にさらに別のファイルが圧縮されて隠されています。")
+                  # そのままダンプするためにHex等を出します
+              
+              # 2. テキストとして強制表示
+              print("【デコーダーを通したテキスト出力】")
+              print(appended_data.decode("utf-8", errors="ignore").strip())
+              
+              print("\n【生データ(Hex)】")
+              print(f"0x{appended_data.hex()[:1000]}") # 長すぎる場合は先頭1000文字
+              
           else:
-              print("\n=== [スキャン完了] ===")
+              print("❌ ファイル内に IEND マーカーが見つかりません。")
           '
