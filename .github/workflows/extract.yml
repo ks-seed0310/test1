@@ -1,10 +1,10 @@
-name: Extract Appended File Data
+name: Unlock Hidden Bottom Image
 
 on:
   workflow_dispatch:
 
 jobs:
-  extract:
+  unlock:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,52 +16,76 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Extract Data After IEND
+      - name: Install pillow
+        run: pip install pillow
+
+      - name: Force Render Whole PNG
         run: |
           python -c '
+          import struct
+          import zlib
+          from PIL import Image, ImageFile
           import os
 
+          # 途中でデータが終わっているように見えても強制的に最後まで読み込ませる魔法
+          ImageFile.LOAD_TRUNCATED_IMAGES = True
+
           file_path = "png1.png"
+          output_path = "secret_unlocked.png"
 
           if not os.path.exists(file_path):
-              print(f"❌ エラー: {file_path} が見つかりません。")
+              print("❌ エラー: png1.png が見つかりません。")
               exit(1)
 
+          print("--- [ヘッダーの解析と強制書き換え] ---")
           with open(file_path, "rb") as f:
-              data = f.read()
+              data = bytearray(f.read())
 
-          # PNGの厳密な終了サイン「IEND」の4バイト
-          iend_sig = b"IEND"
-          iend_index = data.find(iend_sig)
+          # IHDR チャンクのパース
+          # PNGの先頭8バイト(ヘッダ) + 4バイト(IHDRの長さ) = 12バイト目が「IHDR」の名前
+          # 16バイト目から Width(4byte), Height(4byte)
+          orig_width = struct.unpack(">I", data[16:20])[0]
+          orig_height = struct.unpack(">I", data[20:24])[0]
+          print(f"現在のビューアが見ている解像度: {orig_width} x {orig_height}")
 
-          if iend_index != -1:
-              # IEND(4バイト) + その後ろにあるCRC(4バイト) = 計8バイトの後ろが「本当のお尻」
-              payload_start = iend_index + 8
-              appended_data = data[payload_start:]
+          # 【前提を疑う】高さを本来のクソデカサイズ（例として現在の4倍など）に強制パディングして無理やり開く
+          # 画像データが途切れるまで強引に引き伸ばして読み込みます
+          try:
+              img = Image.open(file_path)
+              # 元の画像データから、壊れたヘッダを無視してピクセルを強制再構成
+              # 10.9MBのデータ量から逆算して、高さを思いっきり広げてみます
+              test_height = orig_height * 3  # 高さを3倍にして下半分を露出させる
               
-              print(f"=== [解析結果] ===")
-              print(f"PNGの正規データサイズ: {payload_start} バイト")
-              print(f"後ろにくっついているデータのサイズ: {len(appended_data)} バイト\n")
+              print(f"解像度を強制変更して下半分をサルベージ中... 目標高: {test_height}")
               
-              if len(appended_data) == 0:
-                  print("❌ IENDの後ろには1バイトもデータがありませんでした。")
-                  exit(0)
-
-              print("--- [救出した裏データの全貌] ---")
+              # ダミーのIHDRを作って高さを書き換える
+              new_height_bin = struct.pack(">I", test_height)
+              data[20:24] = new_height_bin
               
-              # 1. Zipファイルなどが結合されている可能性をチェック (PK..)
-              if appended_data.startswith(b"PK\x03\x04"):
-                  print("📦 偽装された【Zipファイル】を検知しました！")
-                  print("ファイルの中にさらに別のファイルが圧縮されて隠されています。")
-                  # そのままダンプするためにHex等を出します
+              # IHDRのCRCを再計算して修正
+              ihdr_data = data[12:29]
+              new_crc = zlib.crc32(ihdr_data) & 0xffffffff
+              data[29:33] = struct.pack(">I", new_crc)
               
-              # 2. テキストとして強制表示
-              print("【デコーダーを通したテキスト出力】")
-              print(appended_data.decode("utf-8", errors="ignore").strip())
+              # 書き換えた一時ファイルを保存してPillowで開く
+              with open("temp_mod.png", "wb") as f_mod:
+                  f_mod.write(data)
+                  
+              unlocked_img = Image.open("temp_mod.png")
+              unlocked_img.save(output_path)
+              print(f"🔓 成功！下半分を解放した画像を「{output_path}」として保存しました！")
               
-              print("\n【生データ(Hex)】")
-              print(f"0x{appended_data.hex()[:1000]}") # 長すぎる場合は先頭1000文字
+              # サイズ確認
+              print(f"サルベージ後の実際の画像サイズ: {unlocked_img.width} x {unlocked_img.height}")
               
-          else:
-              print("❌ ファイル内に IEND マーカーが見つかりません。")
+          except Exception as e:
+              print(f"❌ サルベージ中にエラーが発生しました: {e}")
           '
+
+      # 生成された画像をGitHubのアカウント（Artifacts）からダウンロードできるように保存します
+      withhold-answer: false
+      id: upload-image
+      uses: actions/upload-artifact@v4
+      with:
+        name: unlocked-secret-image
+        path: secret_unlocked.png
