@@ -1,10 +1,10 @@
-name: Extract Secret Second PNG
+name: Decrypt Hidden Second PNG
 
 on:
   workflow_dispatch:
 
 jobs:
-  extract_second:
+  decrypt_image:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,54 +16,57 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Carve Second PNG File
+      - name: Install dependencies
+        run: pip install pycryptodome pillow
+
+      - name: ChaCha20 Decrypt Whole Payload
         run: |
           python -c '
           import os
+          from Crypto.Cipher import ChaCha20
 
           file_path = "png1.png"
-          output_path = "real_answer.png"
+          output_path = "final_answer.png"
 
           if not os.path.exists(file_path):
               print("❌ エラー: png1.png が見つかりません。")
               exit(1)
 
           with open(file_path, "rb") as f:
-              data = f.read()
+              full_data = f.read()
 
-          # ファイル全体の中に「PNGの先頭シグネチャ」が何個あるか探す
-          # \x89PNG\r\n\x1a\n
-          png_sig = b"\x89PNG\r\n\x1a\n"
-          
-          # 先頭（インデックス0）以外に、2枚目のPNGの始まりがないか検索
-          first_index = data.find(png_sig)
-          second_index = data.find(png_sig, first_index + 1)
+          # 1枚目の桜のPNGの正規の終わり（IENDの直後、10,937,438バイト目）
+          # ここから先が、すべて丸ごと暗号化された2枚目のPNGのデータです
+          encrypted_payload = full_data[10937438:]
 
-          if second_index != -1:
-              print(f"🚀 発見！ファイルの {second_index} バイト目に2枚目の隠しPNGの先頭を検知しました！")
-              second_png_data = data[second_index:]
+          if len(encrypted_payload) == 0:
+              # もし位置がズレている場合を考慮し、最初のIENDを厳密に検索
+              iend_index = full_data.find(b"IEND")
+              if iend_index != -1:
+                  encrypted_payload = full_data[iend_index + 8:]
+
+          print(f"暗号化されたデータのサイズ: {len(encrypted_payload)} バイト")
+
+          # 最初の謎解きで判明した「最強の鍵」と「ナンス」
+          key = bytes.fromhex("24677b6b357e2396409d42911166f7ab1f5497b52b78f015bc9d6e04b02cb200")
+          nonce = bytes.fromhex("01e6fa72b91da7768a3bf786")
+
+          print("🔐 ChaCha20 で復号を実行中...")
+          cipher = ChaCha20.new(key=key, nonce=nonce)
+          decrypted_data = cipher.decrypt(encrypted_payload)
+
+          # 復号されたデータが本当にPNG画像（\x89PNG）から始まっているか検証
+          print(f"復号データの先頭10バイト: {decrypted_data[:10]}")
+
+          # もしヘッダが一致しなくても、強制的にファイルとして書き出します
+          with open(output_path, "wb") as f_out:
+              f_out.write(decrypted_data)
               
-              with open(output_path, "wb") as f_out:
-                  f_out.write(second_png_data)
-                  
-              print(f"🔓 成功！隠されていた2枚目の画像を「{output_path}」として分離・保存しました！")
-          else:
-              # もし2枚目のシグネチャが意図的に削られている場合、
-              # 今回ログに出た末尾の怪しいHexデータの塊（49444154...の前のブロック）をそのまま画像化してみる
-              print("⚠️ 2枚目の明示的なPNGヘッダが見つかりません。ファイル末尾の暗号化パッチを個別に抽出します。")
-              
-              # ログの最末尾のデータ構造（0x799d9c...）から、PNGの形を保っている最後の数万バイトを切り出し
-              # 今回は、全体のデータから最後の「怪しいバイナリ」をそのまま画像として強制ダンプします
-              # 作者が「桜の画像データ(IDAT)の末尾」に生データを直書きしているパターンを考慮
-              
-              # 一旦、最後の5000バイトをバイナリとしてそのまま保存してみる
-              with open(output_path, "wb") as f_out:
-                  f_out.write(data[-5000:])
-              print(f"🔓 ファイル最末尾のバイナリを「{output_path}」にダンプしました。")
+          print(f"🔓 復号完了！「{output_path}」として保存しました！")
           '
 
-      - name: Upload Real Answer Image
+      - name: Upload Final Answer Image
         uses: actions/upload-artifact@v4
         with:
-          name: real-answer-image
-          path: real_answer.png
+          name: final-answer-image
+          path: final_answer.png
