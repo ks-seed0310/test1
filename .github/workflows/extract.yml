@@ -1,10 +1,10 @@
-name: Extract Hidden Data
+name: Scan Custom PNG Chunks
 
 on:
-  workflow_dispatch: # GitHubの画面から手動でボタンを押して実行できるようにします
+  workflow_dispatch:
 
 jobs:
-  extract:
+  scan:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,33 +18,74 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Run extraction script
+      - name: Parse PNG Chunks
         run: |
           python -c '
           import requests
+          import struct
 
           url = "https://ks-seed0310.github.io/image/image/png/temp_image_001.png"
-          print(f"Fetching image from: {url}")
+          print(f"Downloading target image: {url}\n")
+          
           response = requests.get(url)
           data = response.content
 
-          iend_marker = b"\x49\x45\x4e\x44\xae\x42\x60\x82"
-          index = data.find(iend_marker)
+          # PNGファイルのヘッダチェック (\x89PNG\r\n\x1a\n)
+          if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+              print("❌ 警告: 有効なPNGファイルではありません。")
+              exit(1)
 
-          if index != -1:
-              hidden_data = data[index + len(iend_marker):]
-              print("\n=== [結果] 隠しデータの抽出に成功しました ===")
+          # 標準的なPNGのチャンク名リスト
+          STANDARD_CHUNKS = {
+              b"IHDR", b"PLTE", b"IDAT", b"IEND",  # 必須チャンク
+              b"cHRM", b"gAMA", b"iCCP", b"sBIT", b"sRGB", b"bKGD",  # 補助チャンク
+              b"hIST", b"tRNS", b"pHYs", b"sPLT", b"tIME",
+              b"iTXt", b"tEXt", b"zTXt"  # テキストチャンク
+          }
+
+          offset = 8 # ヘッダの8バイトを飛ばす
+          data_len = len(data)
+          custom_chunk_found = False
+
+          print("=== [PNG チャンクスキャン開始] ===")
+          
+          while offset < data_len:
+              if offset + 8 > data_len:
+                  break
               
-              try:
-                  text_result = hidden_data.decode("utf-8").strip()
-                  if text_result:
-                      print(f"【テキストデータ】\n{text_result}")
-                  else:
-                      print("【テキストデータ】(空、または空白のみ)")
-              except Exception as e:
-                  print(f"【テキストデコード失敗】: {e}")
+              # 4バイトのデータ長と、4バイトのチャンク名を取得
+              length, chunk_type = struct.unpack(">I4s", data[offset:offset+8])
+              
+              # データの終わりや破損チェック
+              if offset + 8 + length + 4 > data_len:
+                  print(f"⚠️ チャンク {chunk_type.decode(errors=\x27ignore\x27)} の長さデータがファイルサイズを超えています。破損の可能性あり。")
+                  break
+
+              # チャンクのデータ本体
+              chunk_data = data[offset+8 : offset+8+length]
+              
+              # 標準以外の「変わったチャンク」を見つけたら中身を大公開
+              if chunk_type not in STANDARD_CHUNKS:
+                  custom_chunk_found = True
+                  chunk_name = chunk_type.decode(errors=\x27ignore\x27)
+                  print(f"\n🚀 【未登録カスタムチャンク発見!】: [{chunk_name}] (データ長: {length} バイト)")
                   
-              print(f"\n【生データ（16進数Hex）】\n0x{hidden_data.hex()}")
+                  # 1. テキストとして解読を試みる
+                  try:
+                      text_data = chunk_data.decode("utf-8").strip()
+                      if text_data:
+                          print(f" ┗ 📄 テキストデータ:\n{text_data}")
+                  except Exception:
+                      pass
+                  
+                  # 2. バイナリ（Hex）として出力
+                  print(f" ┗ 🔢 生データ(Hex): 0x{chunk_data.hex()}")
+
+              # 次のチャンクへ移動 (長さ4 + 名前4 + データ量 + CRC4)
+              offset += 8 + length + 4
+
+          if not custom_chunk_found:
+              print("\n❌ 変わったカスタムチャンクは見つかりませんでした（すべて標準チャンクでした）。")
           else:
-              print("\n❌ 警告: IENDマーカーが見つかりませんでした。")
+              print("\n=== [スキャン完了] ===")
           '
