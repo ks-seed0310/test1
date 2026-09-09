@@ -1,10 +1,10 @@
-name: Decrypt Hidden Second PNG
+name: Decrypt Whole Image Payload
 
 on:
   workflow_dispatch:
 
 jobs:
-  decrypt_image:
+  decrypt_all:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,10 +16,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install pycryptodome pillow
+      - name: Install pycryptodome
+        run: pip install pycryptodome
 
-      - name: ChaCha20 Decrypt Whole Payload
+      - name: ChaCha20 Decrypt Whole File
         run: |
           python -c '
           import os
@@ -35,34 +35,34 @@ jobs:
           with open(file_path, "rb") as f:
               full_data = f.read()
 
-          # 1枚目の桜のPNGの正規の終わり（IENDの直後、10,937,438バイト目）
-          # ここから先が、すべて丸ごと暗号化された2枚目のPNGのデータです
-          encrypted_payload = full_data[10937438:]
+          print(f"対象ファイルの総データサイズ: {len(full_data)} バイト")
 
-          if len(encrypted_payload) == 0:
-              # もし位置がズレている場合を考慮し、最初のIENDを厳密に検索
-              iend_index = full_data.find(b"IEND")
-              if iend_index != -1:
-                  encrypted_payload = full_data[iend_index + 8:]
-
-          print(f"暗号化されたデータのサイズ: {len(encrypted_payload)} バイト")
-
-          # 最初の謎解きで判明した「最強の鍵」と「ナンス」
+          # 秘密鍵とナンス（最初の問題のセット）
           key = bytes.fromhex("24677b6b357e2396409d42911166f7ab1f5497b52b78f015bc9d6e04b02cb200")
           nonce = bytes.fromhex("01e6fa72b91da7768a3bf786")
 
-          print("🔐 ChaCha20 で復号を実行中...")
+          print("🔐 ファイル全体を ChaCha20 で復号中...")
           cipher = ChaCha20.new(key=key, nonce=nonce)
-          decrypted_data = cipher.decrypt(encrypted_payload)
+          decrypted_data = cipher.decrypt(full_data)
 
-          # 復号されたデータが本当にPNG画像（\x89PNG）から始まっているか検証
+          # 復号データの先頭10バイトをチェック
           print(f"復号データの先頭10バイト: {decrypted_data[:10]}")
+          
+          # もし中にPNGのシグネチャ（\x89PNG）が埋まっていたら、そこから切り出してみる
+          png_sig = b"\x89PNG\r\n\x1a\n"
+          png_index = decrypted_data.find(png_sig)
+          
+          if png_index != -1:
+              print(f"🚀 復号データ内の {png_index} バイト目に本物の隠しPNG画像を検知しました！")
+              final_payload = decrypted_data[png_index:]
+          else:
+              print("⚠️ 明示的なPNGヘッダはありません。復号データ全体をそのまま書き出します。")
+              final_payload = decrypted_data
 
-          # もしヘッダが一致しなくても、強制的にファイルとして書き出します
           with open(output_path, "wb") as f_out:
-              f_out.write(decrypted_data)
+              f_out.write(final_payload)
               
-          print(f"🔓 復号完了！「{output_path}」として保存しました！")
+          print(f"🔓 完了！「{output_path}」のファイルサイズ: {len(final_payload)} バイト")
           '
 
       - name: Upload Final Answer Image
