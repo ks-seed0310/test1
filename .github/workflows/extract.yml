@@ -27,7 +27,7 @@ jobs:
           from PIL import Image, ImageFile
           import os
 
-          # 途中でデータが終わっているように見えても強制的に最後まで読み込ませる魔法
+          # 途中でデータが終わっているように見えても強制的に最後まで読み込ませる
           ImageFile.LOAD_TRUNCATED_IMAGES = True
 
           file_path = "png1.png"
@@ -41,51 +41,39 @@ jobs:
           with open(file_path, "rb") as f:
               data = bytearray(f.read())
 
-          # IHDR チャンクのパース
-          # PNGの先頭8バイト(ヘッダ) + 4バイト(IHDRの長さ) = 12バイト目が「IHDR」の名前
-          # 16バイト目から Width(4byte), Height(4byte)
+          # IHDR チャンクから現在の解像度をパース
           orig_width = struct.unpack(">I", data[16:20])[0]
           orig_height = struct.unpack(">I", data[20:24])[0]
           print(f"現在のビューアが見ている解像度: {orig_width} x {orig_height}")
 
-          # 【前提を疑う】高さを本来のクソデカサイズ（例として現在の4倍など）に強制パディングして無理やり開く
-          # 画像データが途切れるまで強引に引き伸ばして読み込みます
           try:
-              img = Image.open(file_path)
-              # 元の画像データから、壊れたヘッダを無視してピクセルを強制再構成
-              # 10.9MBのデータ量から逆算して、高さを思いっきり広げてみます
-              test_height = orig_height * 3  # 高さを3倍にして下半分を露出させる
-              
+              # 10.9MBのデータ量から逆算して、高さを本来のクソデカサイズ（例として現在の3倍）に強制パディング
+              test_height = orig_height * 3
               print(f"解像度を強制変更して下半分をサルベージ中... 目標高: {test_height}")
               
-              # ダミーのIHDRを作って高さを書き換える
-              new_height_bin = struct.pack(">I", test_height)
-              data[20:24] = new_height_bin
+              # IHDRの縦幅（Height）を書き換える
+              data[20:24] = struct.pack(">I", test_height)
               
-              # IHDRのCRCを再計算して修正
+              # IHDRのCRC（エラーチェック値）を再計算して修正
               ihdr_data = data[12:29]
               new_crc = zlib.crc32(ihdr_data) & 0xffffffff
               data[29:33] = struct.pack(">I", new_crc)
               
-              # 書き換えた一時ファイルを保存してPillowで開く
+              # 書き換えた一時ファイルを保存
               with open("temp_mod.png", "wb") as f_mod:
                   f_mod.write(data)
                   
               unlocked_img = Image.open("temp_mod.png")
               unlocked_img.save(output_path)
               print(f"🔓 成功！下半分を解放した画像を「{output_path}」として保存しました！")
-              
-              # サイズ確認
               print(f"サルベージ後の実際の画像サイズ: {unlocked_img.width} x {unlocked_img.height}")
               
           except Exception as e:
               print(f"❌ サルベージ中にエラーが発生しました: {e}")
           '
 
-      # 生成された画像をGitHubのアカウント（Artifacts）からダウンロードできるように保存します
-      withhold-answer: false
-      id: upload-image
-      uses: actions/upload-artifact@v4
-      with:
-        name: unlocked-secret-image
-        path: secret_unlocked.png
+      - name: Upload Unlocked Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: unlocked-secret-image
+          path: secret_unlocked.png
